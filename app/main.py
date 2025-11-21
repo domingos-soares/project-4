@@ -3,7 +3,8 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="Items Service", version="1.0.0")
+
+ITEM_NOT_FOUND_DETAIL = "Item not found"
 
 
 class ItemBase(BaseModel):
@@ -28,49 +29,69 @@ class Item(ItemBase):
     id: int
 
 
-items_store: Dict[int, Item] = {}
-next_id: int = 1
+class InMemoryItemStore:
+    def __init__(self) -> None:
+        self._items: Dict[int, Item] = {}
+        self._next_id: int = 1
+
+    def list_items(self) -> List[Item]:
+        return list(self._items.values())
+
+    def get_item(self, item_id: int) -> Item:
+        item = self._items.get(item_id)
+        if not item:
+            raise HTTPException(status_code=404, detail=ITEM_NOT_FOUND_DETAIL)
+        return item
+
+    def create_item(self, item_in: ItemCreate) -> Item:
+        item = Item(id=self._next_id, **item_in.dict())
+        self._items[self._next_id] = item
+        self._next_id += 1
+        return item
+
+    def update_item(self, item_id: int, item_in: ItemUpdate) -> Item:
+        stored = self._items.get(item_id)
+        if not stored:
+            raise HTTPException(status_code=404, detail=ITEM_NOT_FOUND_DETAIL)
+
+        update_data = item_in.dict(exclude_unset=True)
+        updated = stored.copy(update=update_data)
+        self._items[item_id] = updated
+        return updated
+
+    def delete_item(self, item_id: int) -> None:
+        if item_id not in self._items:
+            raise HTTPException(status_code=404, detail=ITEM_NOT_FOUND_DETAIL)
+        del self._items[item_id]
+
+
+app = FastAPI(title="Items Service", version="1.0.0")
+store = InMemoryItemStore()
 
 
 @app.get("/items", response_model=List[Item])
 async def list_items() -> List[Item]:
-    return list(items_store.values())
+    return store.list_items()
 
 
 @app.get("/items/{item_id}", response_model=Item)
 async def get_item(item_id: int) -> Item:
-    item = items_store.get(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item
+    return store.get_item(item_id)
 
 
 @app.post("/items", response_model=Item, status_code=201)
 async def create_item(item_in: ItemCreate) -> Item:
-    global next_id
-    item = Item(id=next_id, **item_in.dict())
-    items_store[next_id] = item
-    next_id += 1
-    return item
+    return store.create_item(item_in)
 
 
 @app.put("/items/{item_id}", response_model=Item)
 async def update_item(item_id: int, item_in: ItemUpdate) -> Item:
-    stored = items_store.get(item_id)
-    if not stored:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    update_data = item_in.dict(exclude_unset=True)
-    updated = stored.copy(update=update_data)
-    items_store[item_id] = updated
-    return updated
+    return store.update_item(item_id, item_in)
 
 
 @app.delete("/items/{item_id}", status_code=204)
 async def delete_item(item_id: int) -> None:
-    if item_id not in items_store:
-        raise HTTPException(status_code=404, detail="Item not found")
-    del items_store[item_id]
+    store.delete_item(item_id)
     return None
 
 
